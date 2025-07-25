@@ -321,7 +321,17 @@ func (pool *LegacyPool) Init(gasTip uint64, head *types.Header, reserver txpool.
 	}
 	pool.currentHead.Store(head)
 	pool.currentState = statedb
-	pool.pendingNonces = newNoncer(statedb)
+	// Create StateDB provider that gets fresh state each time to avoid stale nonce issues
+	stateProvider := func() vm.StateDB {
+		if currentHead := pool.currentHead.Load(); currentHead != nil {
+			if freshState, err := pool.chain.StateAt(currentHead.Root); err == nil {
+				return freshState
+			}
+		}
+		// Fallback to current state if fresh state fails
+		return pool.currentState
+	}
+	pool.pendingNonces = newNoncer(stateProvider)
 
 	pool.wg.Add(1)
 	go pool.scheduleReorgLoop()
@@ -1123,8 +1133,6 @@ func (pool *LegacyPool) RemoveTx(hash common.Hash, outofbound bool, unreserve bo
 				// Internal shuffle shouldn't touch the lookup set.
 				pool.enqueueTx(tx.Hash(), tx, false)
 			}
-			// Update the account nonce if needed
-			pool.pendingNonces.setIfLower(addr, tx.Nonce())
 			// Reduce the pending counter
 			pendingGauge.Dec(int64(1 + len(invalids)))
 			return 1 + len(invalids)
@@ -1418,7 +1426,17 @@ func (pool *LegacyPool) reset(oldHead, newHead *types.Header) {
 	}
 	pool.currentHead.Store(newHead)
 	pool.currentState = statedb
-	pool.pendingNonces = newNoncer(statedb)
+	// Create StateDB provider that gets fresh state each time to avoid stale nonce issues
+	stateProvider := func() vm.StateDB {
+		if currentHead := pool.currentHead.Load(); currentHead != nil {
+			if freshState, err := pool.chain.StateAt(currentHead.Root); err == nil {
+				return freshState
+			}
+		}
+		// Fallback to current state if fresh state fails
+		return pool.currentState
+	}
+	pool.pendingNonces = newNoncer(stateProvider)
 
 	// Inject any transactions discarded due to reorgs
 	log.Debug("Reinjecting stale transactions", "count", len(reinject))
@@ -1937,7 +1955,17 @@ func (pool *LegacyPool) Clear() {
 	pool.priced.Reheap()
 	pool.pending = make(map[common.Address]*list)
 	pool.queue = make(map[common.Address]*list)
-	pool.pendingNonces = newNoncer(pool.currentState)
+	// Create StateDB provider that gets fresh state each time to avoid stale nonce issues
+	stateProvider := func() vm.StateDB {
+		if currentHead := pool.currentHead.Load(); currentHead != nil {
+			if freshState, err := pool.chain.StateAt(currentHead.Root); err == nil {
+				return freshState
+			}
+		}
+		// Fallback to current state if fresh state fails
+		return pool.currentState
+	}
+	pool.pendingNonces = newNoncer(stateProvider)
 }
 
 // HasPendingAuth returns a flag indicating whether there are pending

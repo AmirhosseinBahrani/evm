@@ -1,9 +1,9 @@
 package mempool
 
 import (
+	"fmt"
 	errors2 "cosmossdk.io/errors"
 	sdkmath "cosmossdk.io/math"
-	"fmt"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/evm/mempool/txpool"
 	"github.com/cosmos/evm/mempool/txpool/legacypool"
@@ -108,6 +108,9 @@ func (b *Blockchain) NotifyNewBlock() {
 	header := b.CurrentBlock()
 	b.chainHeadFeed.Send(core.ChainHeadEvent{Header: header})
 	b.previousHeaderHash = header.Hash()
+	
+	// TODO: Consider making this synchronous to avoid stale nonce issues
+	// The async reset can cause validation to use outdated nonce state
 }
 
 func (b Blockchain) StateAt(hash common.Hash) (vm.StateDB, error) {
@@ -115,11 +118,16 @@ func (b Blockchain) StateAt(hash common.Hash) (vm.StateDB, error) {
 	if hash == common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000000") || hash == types.EmptyCodeHash {
 		return vm.StateDB(nil), nil
 	}
+	
+	// Always get the latest context to avoid stale nonce state
+	// This ensures we're validating against the most recent account nonces
 	ctx, err := b.GetLatestCtx()
 	if err != nil {
-		fmt.Println(err)
-		return nil, err
+		// Handle state pruning gracefully - if we can't get the latest context,
+		// something is seriously wrong with the chain state
+		return nil, fmt.Errorf("failed to get latest context for StateAt: %w", err)
 	}
+	
 	return statedb.New(ctx, b.vmKeeper, statedb.NewEmptyTxConfig(common.Hash(ctx.BlockHeader().AppHash))), nil
 }
 

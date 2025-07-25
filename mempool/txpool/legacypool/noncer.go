@@ -27,16 +27,16 @@ import (
 // accounts in the pool, falling back to reading from a real state database if
 // an account is unknown.
 type noncer struct {
-	fallback vm.StateDB
-	nonces   map[common.Address]uint64
-	lock     sync.Mutex
+	stateProvider func() vm.StateDB // Function to get fresh StateDB instead of stale fallback
+	nonces        map[common.Address]uint64
+	lock          sync.Mutex
 }
 
 // newNoncer creates a new virtual state database to track the pool nonces.
-func newNoncer(statedb vm.StateDB) *noncer {
+func newNoncer(stateProvider func() vm.StateDB) *noncer {
 	return &noncer{
-		fallback: statedb, //todo: do we need to copy this? seems like it's just a getter. shouldn't be too bad to get it from ctx/kvstore every time
-		nonces:   make(map[common.Address]uint64),
+		stateProvider: stateProvider, // Use provider function to get fresh StateDB each time
+		nonces:        make(map[common.Address]uint64),
 	}
 }
 
@@ -49,8 +49,11 @@ func (txn *noncer) get(addr common.Address) uint64 {
 	defer txn.lock.Unlock()
 
 	if _, ok := txn.nonces[addr]; !ok {
-		if nonce := txn.fallback.GetNonce(addr); nonce != 0 {
-			txn.nonces[addr] = nonce
+		// Get fresh StateDB to avoid stale nonce issues
+		if stateDB := txn.stateProvider(); stateDB != nil {
+			if nonce := stateDB.GetNonce(addr); nonce != 0 {
+				txn.nonces[addr] = nonce
+			}
 		}
 	}
 	return txn.nonces[addr]
@@ -72,8 +75,11 @@ func (txn *noncer) setIfLower(addr common.Address, nonce uint64) {
 	defer txn.lock.Unlock()
 
 	if _, ok := txn.nonces[addr]; !ok {
-		if nonce := txn.fallback.GetNonce(addr); nonce != 0 {
-			txn.nonces[addr] = nonce
+		// Get fresh StateDB to avoid stale nonce issues
+		if stateDB := txn.stateProvider(); stateDB != nil {
+			if fallbackNonce := stateDB.GetNonce(addr); fallbackNonce != 0 {
+				txn.nonces[addr] = fallbackNonce
+			}
 		}
 	}
 	if txn.nonces[addr] <= nonce {
